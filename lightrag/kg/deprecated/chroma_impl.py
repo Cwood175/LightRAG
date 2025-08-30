@@ -95,10 +95,7 @@ class ChromaVectorDBStorage(BaseVectorStorage):
 
             self._collection = self._client.get_or_create_collection(
                 name=self.namespace,
-                metadata={
-                    **collection_settings,
-                    "dimension": self.embedding_func.embedding_dim,
-                },
+                metadata={**collection_settings, "dimension": self.embedding_func.embedding_dim},
             )
             # Use batch size from collection settings if specified
             self._max_batch_size = self.global_config.get(
@@ -168,9 +165,7 @@ class ChromaVectorDBStorage(BaseVectorStorage):
         self, query: str, top_k: int
     ) -> list[dict[str, Any]]:
         try:
-            embedding = await self.embedding_func(
-                [query], _priority=5
-            )  # higher priority for query
+            embedding = await self.embedding_func([query], _priority=5)  # higher priority for query
 
             results = self._collection.query(
                 query_embeddings=embedding.tolist()
@@ -201,11 +196,10 @@ class ChromaVectorDBStorage(BaseVectorStorage):
             logger.error(f"Error during ChromaDB query: {str(e)}")
             raise
 
-    async def index_done_callback(self) -> None:
-        # ChromaDB handles persistence automatically
+    async def index_done_callback(self) -> None:  # ChromaDB handles persistence automatically
         pass
 
-    async def delete_entity(self, entity_name: str) -> None:
+    async def delete_entity(self, entity_name: str) -> None:  # Delete an entity by its ID.
         """Delete an entity by its ID.
 
         Args:
@@ -218,7 +212,7 @@ class ChromaVectorDBStorage(BaseVectorStorage):
             logger.error(f"Error during entity deletion: {str(e)}")
             raise
 
-    async def delete_entity_relation(self, entity_name: str) -> None:
+    async def delete_entity_relation(self, entity_name: str) -> None:  # Delete an entity and its relations by ID.
         """Delete an entity and its relations by ID.
         In vector DB context, this is equivalent to delete_entity.
 
@@ -227,7 +221,7 @@ class ChromaVectorDBStorage(BaseVectorStorage):
         """
         await self.delete_entity(entity_name)
 
-    async def delete(self, ids: list[str]) -> None:
+    async def delete(self, ids: list[str]) -> None:  # Delete vectors with specified IDs
         """Delete vectors with specified IDs
 
         Args:
@@ -235,9 +229,7 @@ class ChromaVectorDBStorage(BaseVectorStorage):
         """
         try:
             self._collection.delete(ids=ids)
-            logger.debug(
-                f"Successfully deleted {len(ids)} vectors from {self.namespace}"
-            )
+            logger.debug(f"Successfully deleted {len(ids)} vectors from {self.namespace}")
         except Exception as e:
             logger.error(f"Error while deleting vectors from {self.namespace}: {e}")
             raise

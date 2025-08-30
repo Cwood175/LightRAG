@@ -3,36 +3,14 @@ from functools import partial
 
 import asyncio
 import json
-import re
 import os
+import re
+import time
 import json_repair
 from typing import Any, AsyncIterator
 from collections import Counter, defaultdict
 
-from .utils import (
-    logger,
-    clean_str,
-    compute_mdhash_id,
-    Tokenizer,
-    is_float_regex,
-    normalize_extracted_info,
-    pack_user_ass_to_openai_messages,
-    split_string_by_multi_markers,
-    truncate_list_by_token_size,
-    compute_args_hash,
-    handle_cache,
-    save_to_cache,
-    CacheData,
-    get_conversation_turns,
-    use_llm_func_with_cache,
-    update_chunk_cache_list,
-    remove_think_tags,
-    pick_by_weighted_polling,
-    pick_by_vector_similarity,
-    process_chunks_unified,
-    build_file_path,
-    sanitize_text_for_encoding,
-)
+from dotenv import load_dotenv
 from .base import (
     BaseGraphStorage,
     BaseKVStorage,
@@ -40,20 +18,40 @@ from .base import (
     TextChunkSchema,
     QueryParam,
 )
+from .kg.shared_storage import get_storage_keyed_lock
 from .prompt import PROMPTS
 from .constants import (
-    GRAPH_FIELD_SEP,
+    DEFAULT_ENTITY_TYPES,
+    DEFAULT_KG_CHUNK_PICK_METHOD,
     DEFAULT_MAX_ENTITY_TOKENS,
     DEFAULT_MAX_RELATION_TOKENS,
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_RELATED_CHUNK_NUMBER,
-    DEFAULT_KG_CHUNK_PICK_METHOD,
-    DEFAULT_ENTITY_TYPES,
     DEFAULT_SUMMARY_LANGUAGE,
+    GRAPH_FIELD_SEP,
 )
-from .kg.shared_storage import get_storage_keyed_lock
-import time
-from dotenv import load_dotenv
+from .utils import (
+    CacheData,
+    build_file_path,
+    clean_str,
+    compute_args_hash,
+    compute_mdhash_id,
+    get_conversation_turns,
+    handle_cache,
+    is_float_regex,
+    logger,
+    normalize_extracted_info,
+    pack_user_ass_to_openai_messages,
+    pick_by_vector_similarity,
+    pick_by_weighted_polling,
+    process_chunks_unified,
+    remove_think_tags,
+    save_to_cache,
+    sanitize_text_for_encoding,
+    split_string_by_multi_markers,
+    truncate_list_by_token_size,
+    use_llm_func_with_cache,
+)
 
 # use the .env that is inside the current folder
 # allows to use different .env file for each lightrag instance
@@ -105,11 +103,13 @@ def chunking_by_token_size(
         for index, start in enumerate(
             range(0, len(tokens), max_token_size - overlap_token_size)
         ):
-            chunk_content = tokenizer.decode(tokens[start : start + max_token_size])
+            chunk_content = tokenizer.encode(
+                tokens[start : start + max_token_size]
+            )
             results.append(
                 {
                     "tokens": min(max_token_size, len(tokens) - start),
-                    "content": chunk_content.strip(),
+                    "content": chunk_content,
                     "chunk_order_index": index,
                 }
             )
@@ -120,7 +120,7 @@ async def _handle_entity_relation_summary(
     description_type: str,
     entity_or_relation_name: str,
     description_list: list[str],
-    seperator: str,
+    separator: str,
     global_config: dict,
     llm_response_cache: BaseKVStorage | None = None,
 ) -> tuple[str, bool]:
@@ -171,7 +171,7 @@ async def _handle_entity_relation_summary(
                 and total_tokens < summary_max_tokens
             ):
                 # no LLM needed, just join the descriptions
-                final_description = seperator.join(current_list)
+                final_description = separator.join(current_list)
                 return final_description if final_description else "", llm_was_used
             else:
                 if total_tokens > summary_context_size and len(current_list) <= 2:
@@ -210,7 +210,7 @@ async def _handle_entity_relation_summary(
                     )
                     current_chunk = []  # next group is empty
                     current_tokens = 0
-                else:  # curren_chunk is ready for summary in reduce phase
+                else:  # current_chunk is ready for summary in reduce phase
                     chunks.append(current_chunk)
                     current_chunk = [desc]  # leave it for next group
                     current_tokens = desc_tokens

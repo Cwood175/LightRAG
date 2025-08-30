@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import os
 import aiohttp
-from typing import Any, List, Dict, Optional
+from dotenv import load_dotenv
 from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
 )
-from .utils import logger
+from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
+from .utils import logger
 
 # use the .env that is inside the current folder
 # allows to use different .env file for each lightrag instance
@@ -22,10 +22,8 @@ load_dotenv(dotenv_path=".env", override=False)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=60),
-    retry=(
-        retry_if_exception_type(aiohttp.ClientError)
-        | retry_if_exception_type(aiohttp.ClientResponseError)
-    ),
+    retry=retry_if_exception_type(aiohttp.ClientError)
+    | retry_if_exception_type(aiohttp.ClientResponseError),
 )
 async def generic_rerank_api(
     query: str,
