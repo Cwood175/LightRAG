@@ -1,24 +1,25 @@
 import asyncio
+import configparser
+import datetime
+import itertools
 import json
 import os
 import re
-import datetime
-from datetime import timezone
-from dataclasses import dataclass, field
-from typing import Any, Union, final
-import numpy as np
-import configparser
 import ssl
-import itertools
+from dataclasses import dataclass, field
+from datetime import timezone
+from typing import Any, final
 
-from lightrag.types import KnowledgeGraph, KnowledgeGraphNode, KnowledgeGraphEdge
-
+import numpy as np
+import pipmaster as pm
 from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
+
+from lightrag.types import KnowledgeGraph, KnowledgeGraphEdge, KnowledgeGraphNode
 
 from ..base import (
     BaseGraphStorage,
@@ -28,19 +29,16 @@ from ..base import (
     DocStatus,
     DocStatusStorage,
 )
-from ..namespace import NameSpace, is_namespace
-from ..utils import logger
 from ..constants import GRAPH_FIELD_SEP
 from ..kg.shared_storage import get_data_init_lock, get_graph_db_lock, get_storage_lock
-
-import pipmaster as pm
+from ..namespace import NameSpace, is_namespace
+from ..utils import logger
 
 if not pm.is_installed("asyncpg"):
     pm.install("asyncpg")
 
 import asyncpg  # type: ignore
 from asyncpg import Pool  # type: ignore
-
 from dotenv import load_dotenv
 
 # use the .env that is inside the current folder
@@ -808,16 +806,17 @@ class PostgreSQLDB:
                 # Check if migration is needed
                 needs_migration = False
 
-                if migration["column"] == "entity_name" and current_length == 255:
-                    needs_migration = True
-                elif (
-                    migration["column"] in ["source_id", "target_id"]
-                    and current_length == 256
-                ):
-                    needs_migration = True
-                elif (
-                    migration["column"] == "file_path"
-                    and current_type == "character varying"
+                if (
+                    migration["column"] == "entity_name"
+                    and current_length == 255
+                    or (
+                        migration["column"] in ["source_id", "target_id"]
+                        and current_length == 256
+                    )
+                    or (
+                        migration["column"] == "file_path"
+                        and current_type == "character varying"
+                    )
                 ):
                     needs_migration = True
 
@@ -828,8 +827,8 @@ class PostgreSQLDB:
 
                     # Execute the migration
                     alter_sql = f"""
-                    ALTER TABLE {migration['table']}
-                    ALTER COLUMN {migration['column']} TYPE {migration['new_type']}
+                    ALTER TABLE {migration["table"]}
+                    ALTER COLUMN {migration["column"]} TYPE {migration["new_type"]}
                     """
 
                     await self.execute(alter_sql)
@@ -2286,7 +2285,7 @@ class PGDocStatusStorage(DocStatusStorage):
             )
             raise
 
-    async def get_by_id(self, id: str) -> Union[dict[str, Any], None]:
+    async def get_by_id(self, id: str) -> dict[str, Any] | None:
         sql = "select * from LIGHTRAG_DOC_STATUS where workspace=$1 and id=$2"
         params = {"workspace": self.workspace, "id": id}
         result = await self.db.query(sql, params, True)
@@ -2521,8 +2520,7 @@ class PGDocStatusStorage(DocStatusStorage):
             Tuple of (list of (doc_id, DocProcessingStatus) tuples, total_count)
         """
         # Validate parameters
-        if page < 1:
-            page = 1
+        page = max(page, 1)
         if page_size < 10:
             page_size = 10
         elif page_size > 200:
@@ -2773,7 +2771,7 @@ class PGDocStatusStorage(DocStatusStorage):
 class PGGraphQueryException(Exception):
     """Exception for the AGE queries."""
 
-    def __init__(self, exception: Union[str, dict[str, Any]]) -> None:
+    def __init__(self, exception: str | dict[str, Any]) -> None:
         if isinstance(exception, dict):
             self.message = exception["message"] if "message" in exception else "unknown"
             self.details = exception["details"] if "details" in exception else "unknown"
@@ -2957,7 +2955,7 @@ class PGGraphStorage(BaseGraphStorage):
                 return json.loads(json_str)
             except json.JSONDecodeError as e:
                 logger.error(f"JSON parsing failed ({context}): {e}")
-                logger.error(f"Raw data (first 100 chars): {repr(json_str[:100])}")
+                logger.error(f"Raw data (first 100 chars): {json_str[:100]!r}")
                 logger.error(f"Error position: line {e.lineno}, column {e.colno}")
                 return None
 
@@ -3022,9 +3020,7 @@ class PGGraphStorage(BaseGraphStorage):
         return d
 
     @staticmethod
-    def _format_properties(
-        properties: dict[str, Any], _id: Union[str, None] = None
-    ) -> str:
+    def _format_properties(properties: dict[str, Any], _id: str | None = None) -> str:
         """
         Convert a dictionary of properties to a string representation that
         can be used in a cypher query insert/merge statement.
@@ -3376,7 +3372,11 @@ class PGGraphStorage(BaseGraphStorage):
             query = """SELECT * FROM cypher('%s', $$
                          MATCH (a:base {entity_id: "%s"})-[r]-(b:base {entity_id: "%s"})
                          DELETE r
-                       $$) AS (r agtype)""" % (self.graph_name, src_label, tgt_label)
+                       $$) AS (r agtype)""" % (
+                self.graph_name,
+                src_label,
+                tgt_label,
+            )
 
             try:
                 await self._query(query, readonly=False)
@@ -3384,10 +3384,12 @@ class PGGraphStorage(BaseGraphStorage):
                     f"[{self.workspace}] Deleted edge from '{source}' to '{target}'"
                 )
             except Exception as e:
-                logger.error(f"[{self.workspace}] Error during edge deletion: {str(e)}")
+                logger.error(f"[{self.workspace}] Error during edge deletion: {e!s}")
                 raise
 
-    async def get_nodes_batch(self, node_ids: list[str], batch_size: int = 1000) -> dict[str, dict]:
+    async def get_nodes_batch(
+        self, node_ids: list[str], batch_size: int = 1000
+    ) -> dict[str, dict]:
         """
         Retrieve multiple nodes in one query using UNWIND.
 
@@ -3453,7 +3455,9 @@ class PGGraphStorage(BaseGraphStorage):
 
         return nodes_dict
 
-    async def node_degrees_batch(self, node_ids: list[str], batch_size: int = 500) -> dict[str, int]:
+    async def node_degrees_batch(
+        self, node_ids: list[str], batch_size: int = 500
+    ) -> dict[str, int]:
         """
         Retrieve the degree for multiple nodes in a single query using UNWIND.
         Calculates the total degree by counting distinct relationships.
@@ -3482,7 +3486,7 @@ class PGGraphStorage(BaseGraphStorage):
         in_degrees = {}
 
         for i in range(0, len(unique_ids), batch_size):
-            batch = unique_ids[i:i + batch_size]
+            batch = unique_ids[i : i + batch_size]
 
             query = f"""
                     WITH input(v, ord) AS (
@@ -3602,7 +3606,7 @@ class PGGraphStorage(BaseGraphStorage):
         edges_dict: dict[tuple[str, str], dict] = {}
 
         for i in range(0, len(uniq_pairs), batch_size):
-            batch = uniq_pairs[i:i + batch_size]
+            batch = uniq_pairs[i : i + batch_size]
 
             pairs = [{"src": p["src"], "tgt": p["tgt"]} for p in batch]
 
@@ -3709,7 +3713,7 @@ class PGGraphStorage(BaseGraphStorage):
         edges_norm: dict[str, list[tuple[str, str]]] = {n: [] for n in unique_ids}
 
         for i in range(0, len(unique_ids), batch_size):
-            batch = unique_ids[i:i + batch_size]
+            batch = unique_ids[i : i + batch_size]
             # Format node IDs for the query
             formatted_ids = ", ".join([f'"{n}"' for n in batch])
 
@@ -4325,7 +4329,7 @@ TABLES = {
                     create_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_DOC_FULL_PK PRIMARY KEY (workspace, id)
-                    )"""
+                    )""",
     },
     "LIGHTRAG_DOC_CHUNKS": {
         "ddl": """CREATE TABLE LIGHTRAG_DOC_CHUNKS (
@@ -4340,7 +4344,7 @@ TABLES = {
                     create_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_DOC_CHUNKS_PK PRIMARY KEY (workspace, id)
-                    )"""
+                    )""",
     },
     "LIGHTRAG_VDB_CHUNKS": {
         "ddl": f"""CREATE TABLE LIGHTRAG_VDB_CHUNKS (
@@ -4355,7 +4359,7 @@ TABLES = {
                     create_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_VDB_CHUNKS_PK PRIMARY KEY (workspace, id)
-                    )"""
+                    )""",
     },
     "LIGHTRAG_VDB_ENTITY": {
         "ddl": f"""CREATE TABLE LIGHTRAG_VDB_ENTITY (
@@ -4369,7 +4373,7 @@ TABLES = {
                     chunk_ids VARCHAR(255)[] NULL,
                     file_path TEXT NULL,
 	                CONSTRAINT LIGHTRAG_VDB_ENTITY_PK PRIMARY KEY (workspace, id)
-                    )"""
+                    )""",
     },
     "LIGHTRAG_VDB_RELATION": {
         "ddl": f"""CREATE TABLE LIGHTRAG_VDB_RELATION (
@@ -4384,7 +4388,7 @@ TABLES = {
                     chunk_ids VARCHAR(255)[] NULL,
                     file_path TEXT NULL,
 	                CONSTRAINT LIGHTRAG_VDB_RELATION_PK PRIMARY KEY (workspace, id)
-                    )"""
+                    )""",
     },
     "LIGHTRAG_LLM_CACHE": {
         "ddl": """CREATE TABLE LIGHTRAG_LLM_CACHE (
@@ -4398,7 +4402,7 @@ TABLES = {
                     create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	                CONSTRAINT LIGHTRAG_LLM_CACHE_PK PRIMARY KEY (workspace, id)
-                    )"""
+                    )""",
     },
     "LIGHTRAG_DOC_STATUS": {
         "ddl": """CREATE TABLE LIGHTRAG_DOC_STATUS (
@@ -4416,7 +4420,7 @@ TABLES = {
 	               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	               CONSTRAINT LIGHTRAG_DOC_STATUS_PK PRIMARY KEY (workspace, id)
-	              )"""
+	              )""",
     },
     "LIGHTRAG_FULL_ENTITIES": {
         "ddl": """CREATE TABLE LIGHTRAG_FULL_ENTITIES (
@@ -4427,7 +4431,7 @@ TABLES = {
                     create_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT LIGHTRAG_FULL_ENTITIES_PK PRIMARY KEY (workspace, id)
-                    )"""
+                    )""",
     },
     "LIGHTRAG_FULL_RELATIONS": {
         "ddl": """CREATE TABLE LIGHTRAG_FULL_RELATIONS (
@@ -4438,7 +4442,7 @@ TABLES = {
                     create_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
                     update_time TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT LIGHTRAG_FULL_RELATIONS_PK PRIMARY KEY (workspace, id)
-                    )"""
+                    )""",
     },
 }
 
@@ -4601,7 +4605,7 @@ SQL_TEMPLATES = {
                               JOIN rc ON TRUE
                      WHERE c.dist < $3
                        AND c.chunk_ids && (rc.chunk_arr::varchar[])
-                     ORDER BY c.dist, c.id 
+                     ORDER BY c.dist, c.id
                          LIMIT $4;
                      """,
     "entities": """
@@ -4627,7 +4631,7 @@ SQL_TEMPLATES = {
                          JOIN rc ON TRUE
                 WHERE c.dist < $3
                   AND c.chunk_ids && (rc.chunk_arr::varchar[])
-                ORDER BY c.dist, c.id 
+                ORDER BY c.dist, c.id
                     LIMIT $4;
                 """,
     "chunks": """
