@@ -1,29 +1,32 @@
 from __future__ import annotations
-import weakref
 
 import asyncio
-import html
 import csv
+import html
 import json
 import logging
 import logging.handlers
 import os
 import re
 import uuid
+import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from hashlib import md5
-from typing import Any, Protocol, Callable, TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Any, Protocol
+
 import numpy as np
 from dotenv import load_dotenv
+
 from lightrag.constants import (
-    DEFAULT_LOG_MAX_BYTES,
     DEFAULT_LOG_BACKUP_COUNT,
     DEFAULT_LOG_FILENAME,
-    GRAPH_FIELD_SEP,
-    DEFAULT_MAX_TOTAL_TOKENS,
+    DEFAULT_LOG_MAX_BYTES,
     DEFAULT_MAX_FILE_PATH_LENGTH,
+    DEFAULT_MAX_TOTAL_TOKENS,
+    GRAPH_FIELD_SEP,
 )
 
 
@@ -219,7 +222,7 @@ def setup_logger(
             file_handler.setLevel(level)
             logger_instance.addHandler(file_handler)
         except PermissionError as e:
-            logger.warning(f"Could not create log file at {log_file_path}: {str(e)}")
+            logger.warning(f"Could not create log file at {log_file_path}: {e!s}")
             logger.warning("Continuing with console logging only")
 
     # Add path filter if requested
@@ -306,8 +309,6 @@ def compute_mdhash_id(content: str, prefix: str = "") -> str:
 class QueueFullError(Exception):
     """Raised when the queue is full and the wait times out"""
 
-    pass
-
 
 def priority_limit_async_func_call(max_size: int, max_queue_size: int = 1000):
     """
@@ -372,7 +373,7 @@ def priority_limit_async_func_call(max_size: int, max_queue_size: int = 1000):
                             logger.debug("limit_async: Task cancelled during execution")
                         except Exception as e:
                             logger.error(
-                                f"limit_async: Error in decorated function: {str(e)}"
+                                f"limit_async: Error in decorated function: {e!s}"
                             )
                             if not future.done():
                                 future.set_exception(e)
@@ -380,7 +381,7 @@ def priority_limit_async_func_call(max_size: int, max_queue_size: int = 1000):
                             queue.task_done()
                     except Exception as e:
                         # Catch all exceptions in worker loop to prevent worker termination
-                        logger.error(f"limit_async: Critical error in worker: {str(e)}")
+                        logger.error(f"limit_async: Critical error in worker: {e!s}")
                         await asyncio.sleep(0.1)  # Prevent high CPU usage
             finally:
                 logger.debug("limit_async: Worker exiting")
@@ -414,7 +415,7 @@ def priority_limit_async_func_call(max_size: int, max_queue_size: int = 1000):
                         # Update task set in one operation
                         tasks.update(new_tasks)
             except Exception as e:
-                logger.error(f"limit_async: Error in health check: {str(e)}")
+                logger.error(f"limit_async: Error in health check: {e!s}")
             finally:
                 logger.debug("limit_async: Health check task exiting")
                 initialized = False
@@ -618,11 +619,11 @@ class TokenizerInterface(Protocol):
     Defines the interface for a tokenizer, requiring encode and decode methods.
     """
 
-    def encode(self, content: str) -> List[int]:
+    def encode(self, content: str) -> list[int]:
         """Encodes a string into a list of tokens."""
         ...
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         """Decodes a list of tokens into a string."""
         ...
 
@@ -643,7 +644,7 @@ class Tokenizer:
         self.model_name: str = model_name
         self.tokenizer: TokenizerInterface = tokenizer
 
-    def encode(self, content: str) -> List[int]:
+    def encode(self, content: str) -> list[int]:
         """
         Encodes a string into a list of tokens using the underlying tokenizer.
 
@@ -655,7 +656,7 @@ class Tokenizer:
         """
         return self.tokenizer.encode(content)
 
-    def decode(self, tokens: List[int]) -> str:
+    def decode(self, tokens: list[int]) -> str:
         """
         Decodes a list of tokens into a string using the underlying tokenizer.
 
@@ -762,7 +763,7 @@ async def handle_cache(
     prompt,
     mode="default",
     cache_type=None,
-) -> str|None:
+) -> str | None:
     """Generic cache handling function with flattened cache keys"""
     if hashing_kv is None:
         return None
@@ -1128,10 +1129,10 @@ async def aexport_data(
                 )
 
                 # Write rows
-                for entity in entities_data:
-                    mdfile.write(
-                        "| " + " | ".join(str(v) for v in entity.values()) + " |\n"
-                    )
+                mdfile.writelines(
+                    "| " + " | ".join(str(v) for v in entity.values()) + " |\n"
+                    for entity in entities_data
+                )
                 mdfile.write("\n\n")
             else:
                 mdfile.write("*No entity data available*\n\n")
@@ -1146,10 +1147,10 @@ async def aexport_data(
                 )
 
                 # Write rows
-                for relation in relations_data:
-                    mdfile.write(
-                        "| " + " | ".join(str(v) for v in relation.values()) + " |\n"
-                    )
+                mdfile.writelines(
+                    "| " + " | ".join(str(v) for v in relation.values()) + " |\n"
+                    for relation in relations_data
+                )
                 mdfile.write("\n\n")
             else:
                 mdfile.write("*No relation data available*\n\n")
@@ -1166,12 +1167,10 @@ async def aexport_data(
                 )
 
                 # Write rows
-                for relationship in relationships_data:
-                    mdfile.write(
-                        "| "
-                        + " | ".join(str(v) for v in relationship.values())
-                        + " |\n"
-                    )
+                mdfile.writelines(
+                    "| " + " | ".join(str(v) for v in relationship.values()) + " |\n"
+                    for relationship in relationships_data
+                )
             else:
                 mdfile.write("*No relationship data available*\n\n")
 
@@ -1253,8 +1252,7 @@ async def aexport_data(
 
     else:
         raise ValueError(
-            f"Unsupported file format: {file_format}. "
-            f"Choose from: csv, excel, md, txt"
+            f"Unsupported file format: {file_format}. Choose from: csv, excel, md, txt"
         )
     if file_format is not None:
         print(f"Data exported to: {output_path} with format: {file_format}")
@@ -1324,7 +1322,7 @@ def lazy_external_import(module_name: str, class_name: str) -> Callable[..., Any
 
 async def update_chunk_cache_list(
     chunk_id: str,
-    text_chunks_storage: "BaseKVStorage",
+    text_chunks_storage: BaseKVStorage,
     cache_keys: list[str],
     cache_scenario: str = "batch_update",
 ) -> None:
@@ -1372,7 +1370,7 @@ def remove_think_tags(text: str) -> str:
 async def use_llm_func_with_cache(
     input_text: str,
     use_llm_func: callable,
-    llm_response_cache: "BaseKVStorage | None" = None,
+    llm_response_cache: BaseKVStorage | None = None,
     max_tokens: int = None,
     history_messages: list[dict[str, str]] = None,
     cache_type: str = "extract",
@@ -1761,7 +1759,7 @@ async def apply_rerank_if_enabled(
 async def process_chunks_unified(
     query: str,
     unique_chunks: list[dict],
-    query_param: "QueryParam",
+    query_param: QueryParam,
     global_config: dict,
     source_type: str = "mixed",
     chunk_token_limit: int = None,  # Add parameter for dynamic token limit
